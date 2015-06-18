@@ -19,6 +19,9 @@ libnmf.a: $(OBJ)
 libnmf.so: $(OBJ)
 	$(CC) -shared -Wl,-soname,$@ $(LIBS) -o $@ $^
 
+nmf_mu.so: nmf_mu.o
+	$(CC) -shared -Wl,-soname,$@ $(LIBS) -o $@ $^
+
 %.o: %.c include/%.h
 	$(CC) $(CCFLAGS) -c $<
 

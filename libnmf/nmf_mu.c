@@ -48,17 +48,15 @@
  * TolFun   in,     used in check for convergence, tolerance for root mean square residual
  */
 
-
+//#define DEBUG_LEVEL 2
+//#define ERROR_CHECKING
 
 
 //defines a factor added to matrix elements when used as divisor to avoid division by zero
 //----------------------------------------------------------------------------------------
+#define ZERO_THRESHOLD 0.0
 #define DIV_BY_ZERO_AVOIDANCE 1E-09
-
-
-
-
-
+#define DEBUG_LEVEL 2
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -68,35 +66,35 @@
 #include <time.h>
 #include <sys/time.h>
 
-
-#include "common.h"
-#include "blaslapack.h"
-#include "outputtiming.h"
-#include "calculatenorm.h"
-#include "calculatemaxchange.h"
-
+static inline void swap(double ** a, double ** b) {
+    double* temp = *a;
+    *a = *b;
+    *b = temp;
+}
 
 
+// dgemm - BLAS routine
+//---------------------
+// used to calculate general matrix-matrix multiplications of the form
+// C = alpha * A * B + beta * C
+static inline int dgemm(char transa, char transb, int m, int n, int k, double alpha, double* a, int lda, double* b, int ldb, double beta, double* c, int ldc) {
+    extern int dgemm_(char* transa, char* transb, int* m, int* n, int* k, double* alpha, double* a, int* lda, double* b, int* ldb, double* beta, double* c, int* ldc);
+    return dgemm_(&transa, &transb, &m, &n, &k, &alpha, a, &lda, b, &ldb, &beta, c, &ldc);
+}
 
 
-
-
+// nmf multiplicative updating
+//---------------------
 double nmf_mu(double * a, double * w0, double * h0, int * pm, int * pn, \
               int * pk, int * maxiter, const double * pTolX, const double * pTolFun) 
 {
- 
-// code added to be able to call from R
-int m = * pm;
-int n = * pn;
-int k = * pk;
-const double TolX = * pTolX;
-const double TolFun = * pTolFun;
-// also: changed w0, h0 to simple pointer (instead of double)
-// end code added
+    int m = * pm;
+    int n = * pn;
+    int k = * pk;
 
 #ifdef PROFILE_NMF_MU
-        struct timeval start, end;
-        gettimeofday(&start, 0);
+    struct timeval start, end;
+    gettimeofday(&start, 0);
 #endif
 
 #if DEBUG_LEVEL >= 2
@@ -111,24 +109,15 @@ const double TolFun = * pTolFun;
   // definition of necessary dynamic data structures
   //...for calculating matrix h
   double* numerh = (double*) malloc(sizeof(double) *k*n);
-  double* work1 = (double*) malloc(sizeof(double)*k*k);                 // used for calculation of h & w
+  double* work1 = (double*) malloc(sizeof(double)*k*k); // used for calculation of h & w
   double* work2 = (double*) malloc(sizeof(double)*k*n);
   double* h = (double*) malloc(sizeof(double)*k*n);
-  //----------------
 
   //...for calculating matrix w
   double* numerw = (double*) malloc(sizeof(double)*m*k);
   double* work2w = (double*) malloc(sizeof(double)*m*k);
   double* w = (double*) malloc(sizeof(double)*m*k);
-  //-----------------
 
-/*  //...for calculating the norm of A-W*H
-  double* d = (double*) malloc(sizeof(double)*m*n);                 //d = a - w*h
-  double dnorm0 = 0.;
-  double dnorm = 0.;
-  const double eps = dlamch('E');                   //machine precision epsilon
-  const double sqrteps = sqrt(eps);                 //squareroot of epsilon
-*/
   int classes[n];
   int niterWOclassChange = 0;
 
@@ -145,12 +134,14 @@ const double TolFun = * pTolFun;
     free(h);
     free(w);
     free(work2w);
-//    free(d);
     return -1;
   }
 #endif
 
 
+#if DEBUG_LEVEL >= 2
+    printf("Allocated memory\n");
+#endif
 
 //Is ZERO_THRESHOLD _not_ defined then use machine epsilon as default
 #ifndef ZERO_THRESHOLD
@@ -166,7 +157,11 @@ const double TolFun = * pTolFun;
   // factorisation step in a loop from 1 to maxiter
   for (iter = 1; iter <= *maxiter; ++iter) {
 
+#if DEBUG_LEVEL >= 2
+    printf("%i ", iter);
+#endif
 
+printf("h");
 
     // calculating matrix h
     //----------------
@@ -190,6 +185,7 @@ const double TolFun = * pTolFun;
       }
     }
     
+printf("w");
 
 
     // calculating matrix w
@@ -215,42 +211,19 @@ const double TolFun = * pTolFun;
       }
     }  
 
-
-
-/*    
-    // calculating the norm of D = A-W*H
-    dnorm = calculateNorm(a, w, h, d, m, n, k);
-
-    
-    // calculating change in w -> dw
-    //----------------------------------
-    double dw = calculateMaxchange(w, w0, m, k, sqrteps);
-
-    
-    // calculating change in h -> dh
-    //-----------------------------------
-    double dh = calculateMaxchange(h, h0, k, n, sqrteps);
-
-    //Max-Change = max(dh, dw) = delta
-    double delta = 0.0;
-    delta = (dh > dw) ? dh : dw;
-*/
-
-
     // storing the matrix results of the current iteration in W0 respectively H0
     swap(&w0, &w);
     swap(&h0, &h);
 
+//#if DEBUG_LEVEL >= 1
+//  printf("iter: %.6d\t dnorm: %.16f\t delta: %.16f\n", iter, dnorm, delta);
+//#endif      
 
-    // storing the norm result of the current iteration
-//    dnorm0 = dnorm;
 
-#if DEBUG_LEVEL >= 1
-  printf("iter: %.6d\t dnorm: %.16f\t delta: %.16f\n", iter, dnorm, delta);
-#endif      
+printf("c");
 
     //Check for Convergence
-    if (iter > 1 && iter%2 == 0) {// FIXED: add to not free out-of-scope memory
+    if (iter > 1 && iter%2 == 0) {
         // check class assignment in h0
         int i,j,sameClasses=1;
         for(i=0; i<n; i++) {
@@ -274,22 +247,8 @@ const double TolFun = * pTolFun;
         else {
             niterWOclassChange = 0;
         }
-
-/*        if (delta < TolX) {
-            *maxiter = iter;
-            break;
-        } */
     }
-/*      else
-    if (dnorm <= TolFun*dnorm0) {
-    *maxiter = iter;
-    break;
-    }
-*/
-
-//    }
-
-
+printf("e");
   } //end of loop from 1 to maxiter
 
 //#if DEBUG_LEVEL > 2
@@ -308,7 +267,6 @@ const double TolFun = * pTolFun;
   free(h);
   free(w);
   free(work2w);
-//  free(d);
 
   // returning calculated norm
   return 0;//dnorm;
